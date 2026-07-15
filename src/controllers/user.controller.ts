@@ -89,9 +89,31 @@ export const update = async (
     const { first_name, last_name, gender, phone } = req.body;
     const file = req.file;
 
+    const update_data: {
+      first_name?: string;
+      last_name?: string;
+      name?: string;
+      gender?: string;
+      phone?: string;
+    } = {};
+
+    if (first_name !== undefined) update_data.first_name = first_name;
+    if (last_name !== undefined) update_data.last_name = last_name;
+    if (gender !== undefined) update_data.gender = gender;
+    if (phone !== undefined) update_data.phone = phone;
+
+    const next_first =
+      first_name !== undefined ? String(first_name).trim() : undefined;
+    const next_last =
+      last_name !== undefined ? String(last_name).trim() : undefined;
+
+    if (next_first !== undefined || next_last !== undefined) {
+      update_data.name = `${next_first || ""} ${next_last || ""}`.trim();
+    }
+
     const user = await User.findByIdAndUpdate(
       user_id,
-      { first_name, last_name, gender, phone },
+      update_data,
       { new: true, runValidators: true }
     );
 
