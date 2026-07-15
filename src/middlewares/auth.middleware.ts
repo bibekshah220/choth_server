@@ -24,6 +24,10 @@ export const authenticate = (roles: Role[] = []) => {
         throw new AppError("Unauthorized. Access denied.", 401);
       }
 
+      if (typeof decoded_data.token_version !== "number") {
+        throw new AppError("Unauthorized. Access denied.", 401);
+      }
+
       if (Date.now() > Number(decoded_data.exp) * 1000) {
         throw new AppError("Token Expired. Access denied.", 401);
       }
@@ -37,6 +41,10 @@ export const authenticate = (roles: Role[] = []) => {
         throw new AppError("Unauthorized. Access denied.", 401);
       }
 
+      if (decoded_data.token_version !== user.token_version) {
+        throw new AppError("Unauthorized. Access denied.", 401);
+      }
+
       if (roles.length > 0 && !roles.includes(user.role)) {
         throw new AppError("Forbidden. Access denied.", 403);
       }
@@ -45,8 +53,8 @@ export const authenticate = (roles: Role[] = []) => {
         _id: String(user._id),
         email: user.email,
         role: user.role,
-        first_name: user.first_name,
-        last_name: user.last_name,
+        first_name: user.first_name || user.name,
+        last_name: user.last_name || "",
       };
 
       next();
@@ -55,3 +63,6 @@ export const authenticate = (roles: Role[] = []) => {
     }
   };
 };
+
+export const isAuth = authenticate();
+export const isAdmin = authenticate([Role.ADMIN]);
