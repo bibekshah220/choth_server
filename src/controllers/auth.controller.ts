@@ -1,13 +1,16 @@
 import type { Request, Response, NextFunction } from "express";
+import crypto from "crypto";
 import { AppError } from "../middlewares/error-handler.middleware.js";
 import User from "../models/user.model.js";
 import type { IUser } from "../models/user.model.js";
 import type { HydratedDocument } from "mongoose";
 import { hash_password, compare_passwords } from "../utils/bcrypt.utils.js";
 import { sign_token } from "../utils/jwt.utils.js";
-import { Gender, Role } from "../config/constants.js";
+import { Role } from "../config/constants.js";
 import { login_schema, signup_schema } from "../validations/auth.validation.js";
 import type { AuthenticatedRequest } from "../types/index.js";
+import { send_email } from "../utils/mail.utils.js";
+import { getOtpHtml, getVerifyEmailHtml } from "../config/html.js";
 
 const COOKIE_OPTIONS = {
   httpOnly: true,
@@ -22,6 +25,20 @@ const LOCK_TIME_MS = 15 * 60 * 1000;
 const INVALID_CREDENTIALS_MESSAGE = "Invalid email or password";
 
 type UserDoc = HydratedDocument<IUser>;
+
+const APP_NAME = process.env.APP_NAME || "Authentication App";
+
+const send_email_safe = async (
+  to: string,
+  subject: string,
+  html: string
+): Promise<void> => {
+  try {
+    await send_email({ to, subject, html });
+  } catch (error) {
+    console.error("Email sending failed", error);
+  }
+};
 
 const increment_login_failures = async (
   user: UserDoc
@@ -60,7 +77,7 @@ export const signup = async (
       throw new AppError(parsed.error.issues[0]?.message || "Invalid request body", 400);
     }
 
-    const { first_name, last_name, email, password, phone, gender } = parsed.data;
+    const { name, email, password } = parsed.data;
 
     const existing = await User.findOne({ email });
     if (existing) {
@@ -71,28 +88,29 @@ export const signup = async (
 
     const user_data: {
       name: string;
-      first_name: string;
-      last_name: string;
       email: string;
       password: string;
-      phone?: string;
-      gender: Gender;
       role: Role;
     } = {
-      name: `${first_name} ${last_name}`.trim(),
-      first_name,
-      last_name,
+      name,
       email,
       password: hashed,
-      gender,
       role: Role.USER,
     };
 
-    if (phone) {
-      user_data.phone = phone;
-    }
-
     const user = await User.create(user_data);
+
+    const verify_token = crypto.randomBytes(24).toString("hex");
+    const verify_html = getVerifyEmailHtml({
+      email: user.email,
+      token: verify_token,
+    });
+
+    await send_email_safe(
+      user.email,
+      `${APP_NAME} - Verify your account`,
+      verify_html
+    );
 
     res.status(201).json({
       message: "signup successful",
@@ -152,6 +170,15 @@ export const login = async (
       role: user.role,
       token_version: user.token_version,
     });
+
+    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    const otp_html = getOtpHtml({ email: user.email, otp });
+
+    await send_email_safe(
+      user.email,
+      `${APP_NAME} - Login security code`,
+      otp_html
+    );
 
     res.cookie("access_token", token, COOKIE_OPTIONS);
 
