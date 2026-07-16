@@ -2,6 +2,7 @@ import type { Request, Response, NextFunction } from "express";
 import crypto from "crypto";
 import { AppError } from "../middlewares/error-handler.middleware.js";
 import User from "../models/user.model.js";
+import AuthToken, { TokenType } from "../models/auth.model.js";
 import type { IUser } from "../models/user.model.js";
 import type { HydratedDocument } from "mongoose";
 import { hash_password, compare_passwords } from "../utils/bcrypt.utils.js";
@@ -10,7 +11,7 @@ import { Role } from "../config/constants.js";
 import { login_schema, signup_schema } from "../validations/auth.validation.js";
 import type { AuthenticatedRequest } from "../types/index.js";
 import { send_email } from "../utils/mail.utils.js";
-import { getOtpHtml, getVerifyEmailHtml } from "../config/html.js";
+import { getOtpHtml, getVerifyEmailHtml, getResetPasswordHtml } from "../config/html.js";
 
 const COOKIE_OPTIONS = {
   httpOnly: true,
@@ -216,6 +217,155 @@ export const logout = async (
     res.status(200).json({
       message: "logout successful",
       status: "success",
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+const PASSWORD_RESET_EXPIRY_MS = 60 * 60 * 1000; // 1 hour
+
+// * forgot password - send reset email
+export const forgotPassword = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> => {
+  try {
+    const { email } = req.body;
+
+    if (!email || typeof email !== "string") {
+      throw new AppError("Email is required", 400);
+    }
+
+    const user = await User.findOne({ email: email.toLowerCase().trim() });
+
+    // Always respond success to prevent email enumeration
+    if (!user) {
+      res.status(200).json({
+        message: "If an account with that email exists, a password reset link has been sent",
+        status: "success",
+      });
+      return;
+    }
+
+    // Delete any existing password reset tokens for this user
+    await AuthToken.deleteMany({
+      user: user._id,
+      token_type: TokenType.PASSWORD_RESET,
+    });
+
+    // Generate new token
+    const reset_token = crypto.randomBytes(32).toString("hex");
+    const expires_at = new Date(Date.now() + PASSWORD_RESET_EXPIRY_MS);
+
+    await AuthToken.create({
+      user: user._id,
+      token: reset_token,
+      token_type: TokenType.PASSWORD_RESET,
+      expires_at,
+    });
+
+    // Send email
+    const reset_html = getResetPasswordHtml({
+      email: user.email,
+      token: reset_token,
+    });
+
+    await send_email_safe(
+      user.email,
+      `${APP_NAME} - Reset your password`,
+      reset_html
+    );
+
+    res.status(200).json({
+      message: "If an account with that email exists, a password reset link has been sent",
+      status: "success",
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// * reset password using token
+export const resetPassword = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> => {
+  try {
+    const { token, password } = req.body;
+
+    if (!token || typeof token !== "string") {
+      throw new AppError("Reset token is required", 400);
+    }
+
+    if (!password || typeof password !== "string" || password.length < 6) {
+      throw new AppError("Password must be at least 6 characters", 400);
+    }
+
+    const auth_token = await AuthToken.findOne({
+      token,
+      token_type: TokenType.PASSWORD_RESET,
+      expires_at: { $gt: new Date() },
+    });
+
+    if (!auth_token) {
+      throw new AppError("Invalid or expired reset token", 400);
+    }
+
+    const user = await User.findById(auth_token.user);
+    if (!user) {
+      throw new AppError("User not found", 404);
+    }
+
+    // Update password and invalidate all sessions
+    user.password = await hash_password(password);
+    user.token_version += 1;
+    await user.save();
+
+    // Delete the used token
+    await auth_token.deleteOne();
+
+    // Clear any existing cookies
+    res.clearCookie("access_token", COOKIE_OPTIONS);
+
+    res.status(200).json({
+      message: "Password reset successful. Please login with your new password.",
+      status: "success",
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// * verify reset token (optional - for frontend validation)
+export const verifyResetToken = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> => {
+  try {
+    const { token } = req.params;
+
+    if (!token || typeof token !== "string") {
+      throw new AppError("Reset token is required", 400);
+    }
+
+    const auth_token = await AuthToken.findOne({
+      token,
+      token_type: TokenType.PASSWORD_RESET,
+      expires_at: { $gt: new Date() },
+    });
+
+    if (!auth_token) {
+      throw new AppError("Invalid or expired reset token", 400);
+    }
+
+    res.status(200).json({
+      message: "Token is valid",
+      status: "success",
+      data: { valid: true },
     });
   } catch (error) {
     next(error);
