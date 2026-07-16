@@ -8,11 +8,17 @@ const password_schema = z
 	.regex(/[0-9]/, "At least one number required")
 	.regex(/[@$!%*?&]/, "At least one special character required");
 
-export const signup_schema = z.object({
-	name: z.string().trim().min(3, "Name must be at least 3 characters long"),
-	email: z.string().trim().email("Invalid email address").toLowerCase(),
-	password: password_schema,
-});
+export const signup_schema = z
+	.object({
+		name: z.string().trim().min(3, "Name must be at least 3 characters long"),
+		email: z.string().trim().email("Invalid email address").toLowerCase(),
+		password: password_schema,
+		confirm_password: z.string(),
+	})
+	.refine((data) => data.password === data.confirm_password, {
+		message: "Passwords do not match",
+		path: ["confirm_password"],
+	});
 
 export const login_schema = z.object({
 	email: z.string().trim().email("Invalid email address").toLowerCase(),
